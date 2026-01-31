@@ -122,15 +122,13 @@ export const user = {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Not authenticated');
 
-        // Separate auth metadata fields from database fields
-        const { year_of_study, interests, free_time, ...dbFields } = settings;
+        // Separate fields that must go to DB vs auth metadata
+        const { full_name, username, avatar_url, ...meta } = settings || {};
 
-        // Store extra profile data in Supabase Auth user_metadata (no schema change needed)
+        // Store settings in Supabase Auth user_metadata under `settings`
         const { data: authData, error: authError } = await supabase.auth.updateUser({
             data: {
-                year_of_study: year_of_study || null,
-                interests: interests || [],
-                free_time: free_time || null
+                settings: meta
             }
         });
 
@@ -139,13 +137,12 @@ export const user = {
             throw authError;
         }
 
-        // Only update database fields that exist in the users table
+        // Update DB fields if provided
         const dbPayload = {};
-        if (dbFields.full_name !== undefined) dbPayload.full_name = dbFields.full_name;
-        if (dbFields.username !== undefined) dbPayload.username = dbFields.username;
-        if (dbFields.avatar_url !== undefined) dbPayload.avatar_url = dbFields.avatar_url;
+        if (full_name !== undefined) dbPayload.full_name = full_name;
+        if (username !== undefined) dbPayload.username = username;
+        if (avatar_url !== undefined) dbPayload.avatar_url = avatar_url;
 
-        // Only update DB if we have fields to update
         if (Object.keys(dbPayload).length > 0) {
             const { data: updateData, error: updateError } = await supabase
                 .from('users')
@@ -160,15 +157,46 @@ export const user = {
             }
         }
 
-        // Return combined data
         const metadata = authData.user?.user_metadata || {};
         return {
-            ...dbFields,
-            year_of_study: metadata.year_of_study,
-            interests: metadata.interests || [],
-            free_time: metadata.free_time
+            ...dbPayload,
+            settings: metadata.settings || {}
         };
     }
+};
+
+// Additional user helpers
+user.changePassword = async (newPassword) => {
+    if (!newPassword || newPassword.length < 8) throw new Error('Password must be at least 8 characters');
+    const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    return data;
+};
+
+user.resetStreak = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+    const { data, error } = await supabase
+        .from('users')
+        .update({ current_streak: 0 })
+        .eq('id', user.id)
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+};
+
+// Checkin history
+checkins.getHistory = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    const { data, error } = await supabase
+        .from('checkins')
+        .select('*, locations(*)')
+        .eq('user_id', user.id)
+        .order('checked_in_at', { ascending: false });
+    if (error) throw error;
+    return data;
 };
 
 // ============ LOCATIONS ============

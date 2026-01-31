@@ -325,6 +325,199 @@ const ProfileModal = ({ isOpen, onClose, currentUser, onSave }) => {
   );
 };
 
+const SettingsModal = ({ isOpen, onClose, currentUser, onSave, addNotification }) => {
+  const [loading, setLoading] = useState(false);
+  const initial = currentUser?.user_metadata?.settings || currentUser?.settings || {};
+  const [settings, setSettings] = useState({
+    eventReminders: initial.eventReminders ?? true,
+    weeklySummary: initial.weeklySummary ?? true,
+    activityTracking: initial.activityTracking ?? true,
+    showCoinBalancePublic: initial.showCoinBalancePublic ?? true,
+    enableStreaks: initial.enableStreaks ?? true,
+    enableAchievements: initial.enableAchievements ?? true,
+    liveVisibility: initial.liveVisibility || 'friends',
+    appearOffline: initial.appearOffline ?? false,
+    hideLocation: initial.hideLocation ?? false,
+    allowFriendRequests: initial.allowFriendRequests ?? true
+  });
+
+  const [history, setHistory] = useState([]);
+  const [pwd, setPwd] = useState('');
+  const [pwd2, setPwd2] = useState('');
+
+  useEffect(() => {
+    setSettings({
+      eventReminders: initial.eventReminders ?? true,
+      weeklySummary: initial.weeklySummary ?? true,
+      activityTracking: initial.activityTracking ?? true,
+      showCoinBalancePublic: initial.showCoinBalancePublic ?? true,
+      enableStreaks: initial.enableStreaks ?? true,
+      enableAchievements: initial.enableAchievements ?? true,
+      liveVisibility: initial.liveVisibility || 'friends',
+      appearOffline: initial.appearOffline ?? false,
+      hideLocation: initial.hideLocation ?? false,
+      allowFriendRequests: initial.allowFriendRequests ?? true
+    });
+  }, [isOpen, currentUser]);
+
+  const loadHistory = async () => {
+    try {
+      const data = await checkins.getHistory();
+      setHistory(data || []);
+    } catch (e) {
+      console.error('Could not load history', e);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) loadHistory();
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const toggle = (key) => setSettings(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      await user.updateSettings(settings);
+      addNotification?.('Settings saved', 'success');
+      if (onSave) {
+        const profile = await user.getProfile();
+        onSave(profile.user);
+      }
+      onClose();
+    } catch (err) {
+      console.error('Save settings failed', err);
+      addNotification?.(err.message || 'Save failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (pwd.length < 8) return addNotification?.('Password must be at least 8 characters', 'error');
+    if (pwd !== pwd2) return addNotification?.('Passwords do not match', 'error');
+    try {
+      await user.changePassword(pwd);
+      addNotification?.('Password changed', 'success');
+      setPwd(''); setPwd2('');
+    } catch (err) {
+      console.error('Password change error', err);
+      addNotification?.(err.message || 'Password change failed', 'error');
+    }
+  };
+
+  const handleResetStreak = async () => {
+    try {
+      await user.resetStreak();
+      addNotification?.('Streak reset to 0', 'success');
+      if (onSave) {
+        const profile = await user.getProfile();
+        onSave(profile.user);
+      }
+    } catch (err) {
+      console.error('Reset streak failed', err);
+      addNotification?.(err.message || 'Reset failed', 'error');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-60 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative z-50 w-[900px] max-w-[95%] bg-[#09090f] rounded-2xl border border-white/10 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">Settings</h3>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="text-sm text-gray-400 hover:text-white">Close</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-6">
+          <div>
+            <h4 className="font-semibold mb-2">General</h4>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.eventReminders} onChange={() => toggle('eventReminders')} />
+              <span className="text-sm">Event reminders</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.weeklySummary} onChange={() => toggle('weeklySummary')} />
+              <span className="text-sm">Weekly progress summary</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.activityTracking} onChange={() => toggle('activityTracking')} />
+              <span className="text-sm">Enable activity tracking</span>
+            </label>
+
+            <h4 className="font-semibold mt-4 mb-2">Gamification</h4>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.showCoinBalancePublic} onChange={() => toggle('showCoinBalancePublic')} />
+              <span className="text-sm">Show coin balance publicly</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.enableStreaks} onChange={() => toggle('enableStreaks')} />
+              <span className="text-sm">Enable streaks</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.enableAchievements} onChange={() => toggle('enableAchievements')} />
+              <span className="text-sm">Enable achievements</span>
+            </label>
+            <div className="mt-2">
+              <button onClick={handleResetStreak} className="px-3 py-2 bg-white/5 rounded-md text-sm">Manual streak reset</button>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="font-semibold mb-2">Privacy</h4>
+            <div className="mb-2">
+              <div className="text-sm mb-1">Live activity visibility</div>
+              <label className="flex items-center gap-3"><input type="radio" name="vis" checked={settings.liveVisibility==='everyone'} onChange={() => setSettings(s=>({...s, liveVisibility:'everyone'}))} /> <span className="text-sm">Everyone</span></label>
+              <label className="flex items-center gap-3"><input type="radio" name="vis" checked={settings.liveVisibility==='friends'} onChange={() => setSettings(s=>({...s, liveVisibility:'friends'}))} /> <span className="text-sm">Friends</span></label>
+              <label className="flex items-center gap-3"><input type="radio" name="vis" checked={settings.liveVisibility==='noone'} onChange={() => setSettings(s=>({...s, liveVisibility:'noone'}))} /> <span className="text-sm">No one</span></label>
+            </div>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.appearOffline} onChange={() => toggle('appearOffline')} />
+              <span className="text-sm">Appear offline while active</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.hideLocation} onChange={() => toggle('hideLocation')} />
+              <span className="text-sm">Hide current location/zone</span>
+            </label>
+            <label className="flex items-center gap-3 mb-2">
+              <input type="checkbox" checked={settings.allowFriendRequests} onChange={() => toggle('allowFriendRequests')} />
+              <span className="text-sm">Allow friend requests</span>
+            </label>
+
+            <h4 className="font-semibold mt-4 mb-2">Security</h4>
+            <div className="mb-2">
+              <input type="password" placeholder="New password" value={pwd} onChange={e=>setPwd(e.target.value)} className="w-full bg-white/5 rounded-md px-3 py-2 mb-2" />
+              <input type="password" placeholder="Confirm password" value={pwd2} onChange={e=>setPwd2(e.target.value)} className="w-full bg-white/5 rounded-md px-3 py-2 mb-2" />
+              <button onClick={handleChangePassword} className="px-3 py-2 bg-white/5 rounded-md">Change password</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h4 className="font-semibold mb-2">Activity history (read-only)</h4>
+          <div className="max-h-40 overflow-y-auto bg-white/5 rounded-md p-2">
+            {history.length === 0 ? (
+              <div className="text-sm text-gray-400">No recent activity</div>
+            ) : (
+              history.map(h => (
+                <div key={h.id} className="text-sm border-b border-white/5 py-1">{new Date(h.checked_in_at || h.checkedInAt).toLocaleString()} — {h.location?.name || h.locationName || 'Unknown'} — {Math.round((h.actualDuration||h.actual_duration||0))} mins</div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400">Cancel</button>
+          <button onClick={handleSave} className="px-4 py-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-md text-white">{loading ? 'Saving...' : 'Save settings'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const CHATS = [
   { id: 1, name: "Study Group A", msg: "Anyone at the library?", time: "2m", active: true },
   { id: 2, name: "Gym Bros", msg: "Leg day lets gooo", time: "1h", active: false },
@@ -538,7 +731,7 @@ const NotificationPanel = ({ items, onClear, onClose }) => (
   </div>
 );
 
-const NavBar = ({ active, setTab, currentUser, onOpenProfile }) => (
+const NavBar = ({ active, setTab, currentUser, onOpenProfile, onOpenSettings }) => (
   <nav className="fixed left-0 top-0 h-full w-24 hidden lg:flex flex-col items-center py-10 z-50 border-r border-white/5 bg-[#030305]/80 backdrop-blur-2xl">
     <motion.div
       initial={{ scale: 0 }}
@@ -582,7 +775,7 @@ const NavBar = ({ active, setTab, currentUser, onOpenProfile }) => (
     </div>
     <div className="mt-auto flex flex-col items-center gap-4">
       <button
-        onClick={() => alert('Settings coming soon! 🚀')}
+        onClick={() => onOpenSettings ? onOpenSettings() : null}
         className="p-3 rounded-xl text-gray-500 hover:text-white hover:bg-white/5 transition"
         title="Settings"
       >
@@ -1691,7 +1884,7 @@ const ChatView = ({ currentUser, activeChannel, setActiveChannel, channels, addN
               </p>
             </div>
             <button
-              onClick={() => alert('Settings coming soon! 🚀')}
+              onClick={() => setShowSettings(true)}
               className="p-2 rounded-lg hover:bg-white/10 transition text-gray-500 hover:text-white"
               title="Settings"
             >
@@ -2087,6 +2280,7 @@ export default function App() {
   const [activeChannel, setActiveChannel] = useState('global');
   const [dmChannels, setDmChannels] = useState([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const activeTabRef = useRef(activeTab);
   const activeChannelRef = useRef(activeChannel);
   const channelLabelRef = useRef({});
@@ -2615,6 +2809,7 @@ export default function App() {
           setTab={setActiveTab}
           currentUser={currentUser}
           onOpenProfile={() => (currentUser ? setShowProfileModal(true) : setShowAuthModal(true))}
+          onOpenSettings={() => setShowSettings(true)}
         />
 
         {/* Notifications */}
@@ -2633,6 +2828,17 @@ export default function App() {
               onClose={() => setShowProfileModal(false)}
               currentUser={currentUser}
               onSave={handleSaveProfile}
+            />
+          )}
+        </AnimatePresence>
+        <AnimatePresence>
+          {showSettings && (
+            <SettingsModal
+              isOpen={showSettings}
+              onClose={() => setShowSettings(false)}
+              currentUser={currentUser}
+              onSave={(u) => setCurrentUser(u)}
+              addNotification={addNotification}
             />
           )}
         </AnimatePresence>
