@@ -66,16 +66,42 @@ export const ChatView = ({ currentUser, activeChannel, setActiveChannel, channel
             try {
                 const data = await chat.getMessages(activeChannel);
                 setMessages(data || []);
-                subscription = chat.subscribeToMessages(activeChannel, (message) => {
+                
+                // Subscribe to new messages (INSERT)
+                const onInsert = (message) => {
                     setMessages((prev) => {
+                        // Check if this exact message already exists (by real ID)
                         if (prev.some(m => m.id === message.id)) return prev;
+                        
+                        // Check if we have an optimistic version of this message (same sender, same text)
+                        const optimisticIndex = prev.findIndex(m => 
+                            String(m.id).startsWith('temp-') && 
+                            m.text === message.text &&
+                            m.sender_id === message.sender_id
+                        );
+                        
+                        if (optimisticIndex !== -1) {
+                            // Replace optimistic with real message
+                            const newMessages = [...prev];
+                            newMessages[optimisticIndex] = message;
+                            return newMessages;
+                        }
+                        
+                        // New message from another user - play sound and add
                         if (message.sender_id !== currentUser?.id) {
                             receiveSound.current.currentTime = 0;
                             receiveSound.current.play().catch(() => { });
                         }
                         return [...prev, message];
                     });
-                });
+                };
+                
+                // Subscribe to deleted messages (DELETE)
+                const onDelete = (deletedMessage) => {
+                    setMessages((prev) => prev.filter(m => m.id !== deletedMessage.id));
+                };
+                
+                subscription = chat.subscribeToMessages(activeChannel, onInsert, onDelete);
             } catch (err) {
                 console.error("Chat Error:", err);
             } finally {
@@ -97,18 +123,37 @@ export const ChatView = ({ currentUser, activeChannel, setActiveChannel, channel
 
         const tempId = `temp-${Date.now()}`;
         const optimisticMsg = {
-            id: tempId, text: text, sender_id: currentUser.id,
+            id: tempId, 
+            text: text, 
+            sender_id: currentUser.id,
             created_at: new Date().toISOString(),
-            sender: { username: currentUser.username, avatar_url: currentUser.avatar_url }
+            sender: { 
+                id: currentUser.id,
+                username: currentUser.username, 
+                avatar_url: currentUser.avatar_url,
+                full_name: currentUser.full_name 
+            },
+            _isOptimistic: true
         };
 
+        // Add optimistic message immediately
         setMessages(prev => [...prev, optimisticMsg]);
+        
+        // Play send sound immediately
+        sendSound.current.currentTime = 0;
+        sendSound.current.play().catch(() => { });
+
         try {
-            sendSound.current.currentTime = 0;
-            sendSound.current.play().catch(() => { });
-            await chat.sendMessage(text, activeChannel);
+            // Send to server and get the real message back
+            const realMessage = await chat.sendMessage(text, activeChannel);
+            
+            // Replace optimistic message with the real one immediately
+            setMessages(prev => prev.map(m => 
+                m.id === tempId ? { ...realMessage, sender: realMessage.sender || optimisticMsg.sender } : m
+            ));
         } catch (err) {
             console.error("Failed:", err);
+            // Remove optimistic message on failure
             setMessages(prev => prev.filter(m => m.id !== tempId));
             addNotification?.('Failed to deliver', 'error');
         }
@@ -271,12 +316,13 @@ export const ChatView = ({ currentUser, activeChannel, setActiveChannel, channel
                         messages.map((msg, idx) => {
                             const isMe = msg.sender_id === currentUser.id;
                             const showAvatar = idx === 0 || messages[idx - 1].sender_id !== msg.sender_id;
+                            const isOptimistic = msg._isOptimistic || String(msg.id).startsWith('temp-');
 
                             return (
                                 <motion.div
                                     initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                                    transition={{ duration: 0.2 }}
+                                    animate={{ opacity: isOptimistic ? 0.7 : 1, y: 0, scale: 1 }}
+                                    transition={{ duration: 0.15 }}
                                     key={msg.id}
                                     className={cn("flex group/msg", isMe ? "justify-end" : "justify-start")}
                                 >
@@ -291,17 +337,18 @@ export const ChatView = ({ currentUser, activeChannel, setActiveChannel, channel
                                             {showAvatar && !isMe && <span className="ml-1 text-[11px] font-bold text-gray-500 uppercase tracking-wider">{msg.sender?.username}</span>}
 
                                             <div
-                                                onClick={(e) => { e.stopPropagation(); setToggledMsgId(prev => prev === msg.id ? null : msg.id); }}
+                                                onClick={(e) => { e.stopPropagation(); if (!isOptimistic) setToggledMsgId(prev => prev === msg.id ? null : msg.id); }}
                                                 className={cn(
                                                     "relative px-5 py-3.5 text-[15px] leading-relaxed cursor-pointer transition-all duration-200 hover:scale-[1.01] hover:shadow-lg",
                                                     isMe
                                                         ? "bg-gradient-to-br from-violet-600 via-indigo-600 to-indigo-700 text-white rounded-[24px] rounded-tr-md shadow-[0_4px_15px_rgba(79,70,229,0.3)] border border-indigo-400/20"
-                                                        : "bg-[#181820]/90 backdrop-blur-xl text-gray-100 rounded-[24px] rounded-tl-md border border-white/10 shadow-sm"
+                                                        : "bg-[#181820]/90 backdrop-blur-xl text-gray-100 rounded-[24px] rounded-tl-md border border-white/10 shadow-sm",
+                                                    isOptimistic && "animate-pulse"
                                                 )}
                                             >
                                                 {msg.text}
 
-                                                {toggledMsgId === msg.id && (
+                                                {toggledMsgId === msg.id && !isOptimistic && (
                                                     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className={cn("absolute -top-12 flex bg-[#1a1a24] border border-white/10 p-1.5 rounded-xl shadow-2xl z-50", isMe ? "right-0" : "left-0")}>
                                                         <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(msg.text); setToggledMsgId(null); }} className="hover:bg-white/10 p-2 rounded-lg text-white" title="Copy"><Paperclip className="w-3.5 h-3.5" /></button>
                                                         {isMe && <button onClick={(e) => { e.stopPropagation(); const msgId = msg.id; setMessages(p => p.filter(m => m.id !== msgId)); setToggledMsgId(null); chat.deleteMessage(msgId).catch(() => { addNotification?.('Failed to delete message', 'error'); }); }} className="hover:bg-red-500/20 text-red-400 p-2 rounded-lg ml-1" title="Delete"><X className="w-3.5 h-3.5" /></button>}
@@ -309,7 +356,14 @@ export const ChatView = ({ currentUser, activeChannel, setActiveChannel, channel
                                                 )}
                                             </div>
                                             <span className={cn("text-[10px] font-medium opacity-0 group-hover/msg:opacity-100 transition-opacity", isMe ? "text-indigo-300/60 mr-2" : "text-gray-600 ml-2")}>
-                                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                {isOptimistic ? (
+                                                    <span className="flex items-center gap-1">
+                                                        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+                                                        Sending...
+                                                    </span>
+                                                ) : (
+                                                    new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                                )}
                                             </span>
                                         </div>
                                     </div>

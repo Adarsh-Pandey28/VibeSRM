@@ -355,13 +355,16 @@ export const chat = {
         const { data, error } = await supabase
             .from('messages')
             .insert({ sender_id: user.id, text, channel_id: channelId })
-            .select()
+            .select('*, sender:sender_id(id, username, full_name, avatar_url)')
             .single();
         if (error) throw error;
         return data;
     },
 
-    subscribeToMessages: (channelId, callback) => {
+    subscribeToMessages: (channelId, onInsert, onDelete) => {
+        // Cache for sender info to avoid repeated fetches
+        const senderCache = new Map();
+        
         return supabase
             .channel(`channel:${channelId}`)
             .on('postgres_changes', {
@@ -370,12 +373,29 @@ export const chat = {
                 table: 'messages',
                 filter: `channel_id=eq.${channelId}`
             }, async (payload) => {
-                const { data: sender } = await supabase
-                    .from('users')
-                    .select('id, username, full_name, avatar_url')
-                    .eq('id', payload.new.sender_id)
-                    .single();
-                callback({ ...payload.new, sender });
+                const senderId = payload.new.sender_id;
+                
+                // Check cache first
+                let sender = senderCache.get(senderId);
+                if (!sender) {
+                    const { data } = await supabase
+                        .from('users')
+                        .select('id, username, full_name, avatar_url')
+                        .eq('id', senderId)
+                        .single();
+                    sender = data;
+                    if (sender) senderCache.set(senderId, sender);
+                }
+                
+                onInsert({ ...payload.new, sender });
+            })
+            .on('postgres_changes', {
+                event: 'DELETE',
+                schema: 'public',
+                table: 'messages',
+                filter: `channel_id=eq.${channelId}`
+            }, (payload) => {
+                if (onDelete) onDelete(payload.old);
             })
             .subscribe();
     },

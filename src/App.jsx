@@ -477,6 +477,7 @@ export default function App() {
               onClose={() => setShowProfileModal(false)}
               currentUser={currentUser}
               onSave={handleSaveProfile}
+              userStats={userStats}
             />
           )}
         </AnimatePresence>
